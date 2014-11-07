@@ -881,7 +881,7 @@ end;
 
 function HookEmAll(out GlobalHookHandle: THandle): Boolean;
 begin
-  GlobalHookHandle := SetWindowsHookEx($FFFFFFFF, @CBTProc, hInstance, 0);
+  GlobalHookHandle := SetWindowsHookEx(WH_CBT, @CBTProc, hInstance, 0);
   Result := GlobalHookHandle <> 0;
 end;
 
