@@ -5,6 +5,8 @@ interface
 uses
   Windows, TlHelp32, PSAPI;
 
+{$DEFINE RTL_READ_WRITE} // Использовать Move вместо NtRead[Write]VirtualMemory
+
 const
   SE_DEBUG_NAME         = 'SeDebugPrivilege';
   SE_SHUTDOWN_NAME      = 'SeShutdownPrivilege';
@@ -823,7 +825,9 @@ end;
 // Установка перехватчика:
 function SetHook(OldProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock): Boolean;
 var
+{$IFNDEF RTL_READ_WRITE}
   ReadBytes, WrittenBytes: NativeUInt;
+{$ENDIF}
   FarJump: TFarJump;
   OldProtect: Cardinal;
 begin
@@ -845,9 +849,17 @@ begin
   StopThreads;
   VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_READWRITE, @OldProtect);
   FillChar(OriginalBlock, SizeOf(FarJump), #0);
-  NtReadVirtualMemory(GetCurrentProcess, OldProcAddress, @OriginalBlock[0], SizeOf(FarJump), ReadBytes);
-  NtWriteVirtualMemory(GetCurrentProcess, OldProcAddress, @FarJump, SizeOf(FarJump), WrittenBytes);
-  Result := WrittenBytes <> 0;
+
+  {$IFDEF RTL_READ_WRITE}
+    Move(OldProcAddress^, OriginalBlock[0], SizeOf(FarJump));
+    Move(FarJump, OldProcAddress^, SizeOf(FarJump));
+    Result := True;
+  {$ELSE}
+    NtReadVirtualMemory(GetCurrentProcess, OldProcAddress, @OriginalBlock[0], SizeOf(FarJump), ReadBytes);
+    NtWriteVirtualMemory(GetCurrentProcess, OldProcAddress, @FarJump, SizeOf(FarJump), WrittenBytes);
+    Result := WrittenBytes <> 0;
+  {$ENDIF}
+
   VirtualProtect(OldProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
   RunThreads;
 end;
@@ -857,13 +869,22 @@ end;
 // Снятие перехвата:
 function UnHook(OriginalProcAddress: Pointer; OriginalBlock: TOriginalBlock): Boolean;
 var
+{$IFNDEF RTL_READ_WRITE}
   WrittenBytes: NativeUInt;
+{$ENDIF}
   OldProtect: Cardinal;
 begin
   StopThreads;
   VirtualProtect(OriginalProcAddress, SizeOf(TFarJump), PAGE_READWRITE, @OldProtect);
-  NtWriteVirtualMemory(GetCurrentProcess, OriginalProcAddress, @OriginalBlock[0], SizeOf(TFarJump), WrittenBytes);
-  Result := WrittenBytes <> 0;
+
+  {$IFDEF RTL_READ_WRITE}
+    Move(OriginalBlock[0], OriginalProcAddress^, SizeOf(TFarJump));
+    Result := True;
+  {$ELSE}
+    NtWriteVirtualMemory(GetCurrentProcess, OriginalProcAddress, @OriginalBlock[0], SizeOf(TFarJump), WrittenBytes);
+    Result := WrittenBytes <> 0;
+  {$ENDIF}
+
   VirtualProtect(OriginalProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
   RunThreads;
 end;
