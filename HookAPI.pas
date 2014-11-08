@@ -5,7 +5,7 @@ interface
 uses
   Windows, TlHelp32, PSAPI;
 
-//{$DEFINE RTL_READ_WRITE} // Использовать Move вместо NtRead[Write]VirtualMemory
+{$DEFINE RTL_READ_WRITE} // Использовать Move вместо NtRead[Write]VirtualMemory
 
 const
   SE_DEBUG_NAME         = 'SeDebugPrivilege';
@@ -847,7 +847,7 @@ begin
 {$ENDIF}
 
   if SuspendThreads then StopThreads;
-  VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_READWRITE, @OldProtect);
+  VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
   FillChar(OriginalBlock, SizeOf(FarJump), #0);
 
   {$IFDEF RTL_READ_WRITE}
@@ -876,7 +876,7 @@ var
 begin
   if SuspendThreads then StopThreads;
 
-  VirtualProtect(OriginalProcAddress, SizeOf(TFarJump), PAGE_READWRITE, @OldProtect);
+  VirtualProtect(OriginalProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
 
   {$IFDEF RTL_READ_WRITE}
     Move(OriginalBlock[0], OriginalProcAddress^, SizeOf(TFarJump));
