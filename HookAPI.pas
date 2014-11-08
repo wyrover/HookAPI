@@ -5,7 +5,7 @@ interface
 uses
   Windows, TlHelp32, PSAPI;
 
-{$DEFINE RTL_READ_WRITE} // Использовать Move вместо NtRead[Write]VirtualMemory
+//{$DEFINE RTL_READ_WRITE} // Использовать Move вместо NtRead[Write]VirtualMemory
 
 const
   SE_DEBUG_NAME         = 'SeDebugPrivilege';
@@ -56,8 +56,8 @@ function UnloadDll64(ProcessID: LongWord; ModuleName: PAnsiChar; GMHAddress: UIn
 // Для DLL:
 procedure StopThreads;
 procedure RunThreads;
-function  SetHook(OldProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock): Boolean;
-function  UnHook(OriginalProcAddress: Pointer; OriginalBlock: TOriginalBlock): Boolean;
+function  SetHook(OldProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
+function  UnHook(OriginalProcAddress: Pointer; OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
 function  HookEmAll(out GlobalHookHandle: THandle): Boolean;
 procedure UnHookEmAll(GlobalHookHandle: THandle);
 
@@ -823,7 +823,7 @@ end;
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 // Установка перехватчика:
-function SetHook(OldProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock): Boolean;
+function SetHook(OldProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
 var
 {$IFNDEF RTL_READ_WRITE}
   ReadBytes, WrittenBytes: NativeUInt;
@@ -846,7 +846,7 @@ begin
   FarJump.RetOp   := $C3;                   //  ----->  ret
 {$ENDIF}
 
-  StopThreads;
+  if SuspendThreads then StopThreads;
   VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_READWRITE, @OldProtect);
   FillChar(OriginalBlock, SizeOf(FarJump), #0);
 
@@ -861,20 +861,21 @@ begin
   {$ENDIF}
 
   VirtualProtect(OldProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
-  RunThreads;
+  if SuspendThreads then RunThreads;
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 // Снятие перехвата:
-function UnHook(OriginalProcAddress: Pointer; OriginalBlock: TOriginalBlock): Boolean;
+function UnHook(OriginalProcAddress: Pointer; OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
 var
 {$IFNDEF RTL_READ_WRITE}
   WrittenBytes: NativeUInt;
 {$ENDIF}
   OldProtect: Cardinal;
 begin
-  StopThreads;
+  if SuspendThreads then StopThreads;
+
   VirtualProtect(OriginalProcAddress, SizeOf(TFarJump), PAGE_READWRITE, @OldProtect);
 
   {$IFDEF RTL_READ_WRITE}
@@ -886,7 +887,7 @@ begin
   {$ENDIF}
 
   VirtualProtect(OriginalProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
-  RunThreads;
+  if SuspendThreads then RunThreads;
 end;
 
 
