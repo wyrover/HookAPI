@@ -68,8 +68,8 @@ const
   ESOverridePrefix     = $26;
   FSOverridePrefix     = $64;
   GSOverridePrefix     = $65;
-  BranchNotTakenPrefix = $2E; // Только с Jcc
-  BranchTakenPrefix    = $3E; // Только с Jcc
+  BranchNotTakenPrefix = $2E; // РўРѕР»СЊРєРѕ СЃ Jcc
+  BranchTakenPrefix    = $3E; // РўРѕР»СЊРєРѕ СЃ Jcc
 
   // Legacy Prefix GRP 3:
   OperandSizeOverridePrefix = $66;
@@ -77,12 +77,12 @@ const
   // Legacy Prefix GRP 4:
   AddressSizeOverridePrefix = $67;
 
-// REX Prefix - определяет 64х-битный размер операндов, расширенные контрольные регистры:
+// REX Prefix - РѕРїСЂРµРґРµР»СЏРµС‚ 64С…-Р±РёС‚РЅС‹Р№ СЂР°Р·РјРµСЂ РѕРїРµСЂР°РЅРґРѕРІ, СЂР°СЃС€РёСЂРµРЅРЅС‹Рµ РєРѕРЅС‚СЂРѕР»СЊРЅС‹Рµ СЂРµРіРёСЃС‚СЂС‹:
 const
   REXNone = $00;
   RexDiapason = [$40..$4F];
 
-// Опкоды:
+// РћРїРєРѕРґС‹:
 const
   EXTENDED_OPCODE = $0F;
   ThirdByteOpcodeSignature = [$66, $F2, $F3];
@@ -203,7 +203,7 @@ var
 begin
 {
 
-  Структура инструкции:
+  РЎС‚СЂСѓРєС‚СѓСЂР° РёРЅСЃС‚СЂСѓРєС†РёРё:
 
         GRP 1, 2, 3, 4                          7.....0   7.....0   7.....0
   +------------------------+-------------------+---------------------------+
@@ -220,12 +220,12 @@ begin
               Mod R/M Byte               SIB Byte
 
 
-  Принцип разбора:
-   1) Получить префиксы (опциональные, до 4х байт)
-   2) Если код х64 - получить опциональный REX-префикс, отвечающий за 64х-битную адресацию.
-   3) Спарсить опкод (от одного до трёх байт, в зависимости от префиксов и первого байта опкода)
-   4) По таблице опкодов определить наличие байта ModRM и размер данных
-   5) По таблице ModRM (если инструкция использует ModRM) определить наличие SIB
+  РџСЂРёРЅС†РёРї СЂР°Р·Р±РѕСЂР°:
+   1) РџРѕР»СѓС‡РёС‚СЊ РїСЂРµС„РёРєСЃС‹ (РѕРїС†РёРѕРЅР°Р»СЊРЅС‹Рµ, РґРѕ 4С… Р±Р°Р№С‚)
+   2) Р•СЃР»Рё РєРѕРґ С…64 - РїРѕР»СѓС‡РёС‚СЊ РѕРїС†РёРѕРЅР°Р»СЊРЅС‹Р№ REX-РїСЂРµС„РёРєСЃ, РѕС‚РІРµС‡Р°СЋС‰РёР№ Р·Р° 64С…-Р±РёС‚РЅСѓСЋ Р°РґСЂРµСЃР°С†РёСЋ.
+   3) РЎРїР°СЂСЃРёС‚СЊ РѕРїРєРѕРґ (РѕС‚ РѕРґРЅРѕРіРѕ РґРѕ С‚СЂС‘С… Р±Р°Р№С‚, РІ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚ РїСЂРµС„РёРєСЃРѕРІ Рё РїРµСЂРІРѕРіРѕ Р±Р°Р№С‚Р° РѕРїРєРѕРґР°)
+   4) РџРѕ С‚Р°Р±Р»РёС†Рµ РѕРїРєРѕРґРѕРІ РѕРїСЂРµРґРµР»РёС‚СЊ РЅР°Р»РёС‡РёРµ Р±Р°Р№С‚Р° ModRM Рё СЂР°Р·РјРµСЂ РґР°РЅРЅС‹С…
+   5) РџРѕ С‚Р°Р±Р»РёС†Рµ ModRM (РµСЃР»Рё РёРЅСЃС‚СЂСѓРєС†РёСЏ РёСЃРїРѕР»СЊР·СѓРµС‚ ModRM) РѕРїСЂРµРґРµР»РёС‚СЊ РЅР°Р»РёС‡РёРµ SIB
 
 }
 
@@ -233,7 +233,7 @@ begin
   FillChar(Instruction, SizeOf(Instruction), #0);
   OperandSize := 0;
 
-  // Получаем Legacy Prefix всех групп (GRP 1 - GRP 4):
+  // РџРѕР»СѓС‡Р°РµРј Legacy Prefix РІСЃРµС… РіСЂСѓРїРї (GRP 1 - GRP 4):
   for I := 0 to 3 do
   begin
     case GetByte(Code, 0) of
@@ -259,16 +259,16 @@ begin
 
   Instruction.REXOffset := Instruction.PrefixesSize;
 
-  // Выставляем смещение опкода равное REX'у - вдруг REX'a нет,
-  // а смещение опкода уже стоит:
+  // Р’С‹СЃС‚Р°РІР»СЏРµРј СЃРјРµС‰РµРЅРёРµ РѕРїРєРѕРґР° СЂР°РІРЅРѕРµ REX'Сѓ - РІРґСЂСѓРі REX'a РЅРµС‚,
+  // Р° СЃРјРµС‰РµРЅРёРµ РѕРїРєРѕРґР° СѓР¶Рµ СЃС‚РѕРёС‚:
   Instruction.OpcodeOffset := Instruction.REXOffset;
 
-  // Получаем REX-префикс:
+  // РџРѕР»СѓС‡Р°РµРј REX-РїСЂРµС„РёРєСЃ:
   if Is64Bit then
   begin
     TempByte := GetByte(Code, Instruction.REXOffset);
 
-    // Проверяем, является ли байт REX-префиксом [$40..$4F]:
+    // РџСЂРѕРІРµСЂСЏРµРј, СЏРІР»СЏРµС‚СЃСЏ Р»Рё Р±Р°Р№С‚ REX-РїСЂРµС„РёРєСЃРѕРј [$40..$4F]:
     if TempByte in RexDiapason then
     begin
       Inc(Result);
@@ -282,21 +282,21 @@ begin
       Instruction.REXStruct.R := IsBitSet(RexByte, 2);
       Instruction.REXStruct.W := IsBitSet(RexByte, 3);
 
-      // Обрабатываем REX:
+      // РћР±СЂР°Р±Р°С‚С‹РІР°РµРј REX:
       case Instruction.REXStruct.W of
         True: if (Instruction.LegacyPrefixes[GRP1] = OperandSizeOverridePrefix) or
                  (Instruction.LegacyPrefixes[GRP2] = OperandSizeOverridePrefix) or
                  (Instruction.LegacyPrefixes[GRP3] = OperandSizeOverridePrefix) or
                  (Instruction.LegacyPrefixes[GRP4] = OperandSizeOverridePrefix)
               then
-                OperandSize := 4  // 4 байта = 32 бита
+                OperandSize := 4  // 4 Р±Р°Р№С‚Р° = 32 Р±РёС‚Р°
               else
-                OperandSize := 0; // Размер операнда определяется через CS.D
+                OperandSize := 0; // Р Р°Р·РјРµСЂ РѕРїРµСЂР°РЅРґР° РѕРїСЂРµРґРµР»СЏРµС‚СЃСЏ С‡РµСЂРµР· CS.D
 
-        False: OperandSize := 8; // 8 байт = 64 бита
+        False: OperandSize := 8; // 8 Р±Р°Р№С‚ = 64 Р±РёС‚Р°
       end;
 
-      // Увеличиваем смещение опкода:
+      // РЈРІРµР»РёС‡РёРІР°РµРј СЃРјРµС‰РµРЅРёРµ РѕРїРєРѕРґР°:
       Inc(Instruction.OpcodeOffset);
 
     // if byte is REX-byte <-
@@ -306,19 +306,19 @@ begin
   end;
 
 
-  // Разбираем опкод:
+  // Р Р°Р·Р±РёСЂР°РµРј РѕРїРєРѕРґ:
   OpCodeByte := GetByte(Code, Instruction.OpcodeOffset);
   Instruction.OpcodeIsExtended := OpCodeByte = EXTENDED_OPCODE;
 
   case Instruction.OpcodeIsExtended of
     True:
     begin
-      // Разделяем двухбайтные и трёхбайтные опкоды:
+      // Р Р°Р·РґРµР»СЏРµРј РґРІСѓС…Р±Р°Р№С‚РЅС‹Рµ Рё С‚СЂС‘С…Р±Р°Р№С‚РЅС‹Рµ РѕРїРєРѕРґС‹:
       if Instruction.OpcodeOffset > 0 then
       begin
         if GetByte(Code, Instruction.OpcodeOffset - 1) in ThirdByteOpcodeSignature then
         begin
-          // Трёхбайтный опкод:
+          // РўСЂС‘С…Р±Р°Р№С‚РЅС‹Р№ РѕРїРєРѕРґ:
           Instruction.LegacyPrefixes[Instruction.PrefixesSize - 1] := PrefixNone;
           Dec(Instruction.OpcodeOffset);
 
@@ -329,7 +329,7 @@ begin
         end
         else
         begin
-          // Двухбайтный опкод:
+          // Р”РІСѓС…Р±Р°Р№С‚РЅС‹Р№ РѕРїРєРѕРґ:
           Instruction.OpcodeSize := 2;
           Instruction.Opcode[0] := OpCodeByte;
           Instruction.Opcode[1] := GetByte(Code, Instruction.OpcodeOffset + 1);
@@ -337,7 +337,7 @@ begin
       end
       else
       begin
-        // Двухбайтный опкод:
+        // Р”РІСѓС…Р±Р°Р№С‚РЅС‹Р№ РѕРїРєРѕРґ:
         Instruction.OpcodeSize := 2;
         Instruction.Opcode[0] := OpCodeByte;
         Instruction.Opcode[1] := GetByte(Code, Instruction.OpcodeOffset + 1);
@@ -360,7 +360,7 @@ begin
     Inc(Result);
     Instruction.ModRMOffset := Instruction.OpcodeOffset + Instruction.OpcodeSize;
 
-    // Разбираем байт ModR/M:
+    // Р Р°Р·Р±РёСЂР°РµРј Р±Р°Р№С‚ ModR/M:
     ModRmByte := GetByte(Code, Instruction.ModRMOffset);
     Instruction.SIBPresent := IsSibPresent(ModRmByte);
     GetModRmParts(ModRmByte, _Mod, _Reg, _RM);
