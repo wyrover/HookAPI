@@ -1,4 +1,4 @@
-unit MicroDAsm;
+﻿unit MicroDAsm;
 
 interface
 
@@ -22,6 +22,7 @@ type
 
     OpcodeOffset     : Byte;
     OpcodeIsExtended : Boolean;
+    OpcodeFlags      : Byte;
     OpcodeSize       : Byte;
     Opcode           : array [0..2] of Byte;
     FullOpcode       : LongWord;
@@ -170,7 +171,7 @@ end;
 function IsModRmPresent(Opcode: LongWord; Size: LongWord): Boolean; inline;
 begin
   Result := False;
-  case Opcode of
+  case Size of
     1: Result := (OneByteOpcodeFlags[Opcode] and OP_MODRM) = OP_MODRM;
     2: Result := (TwoBytesOpcodeFlags[Opcode] and OP_MODRM) = OP_MODRM;
     //3: ...
@@ -197,7 +198,7 @@ var
   ModRmByte   : Byte;
   SibByte     : Byte;
   I           : Byte;
-  OperandSize : Byte;
+  //OperandSize : Byte;
   _Mod,   _Reg,   _RM   : Byte;
   _Scale, _Index, _Base : Byte;
 begin
@@ -231,7 +232,7 @@ begin
 
   Result := 0;
   FillChar(Instruction, SizeOf(Instruction), #0);
-  OperandSize := 0;
+  //OperandSize := 0;
 
   // Получаем Legacy Prefix всех групп (GRP 1 - GRP 4):
   for I := 0 to 3 do
@@ -274,14 +275,14 @@ begin
       Inc(Result);
 
       RexByte := TempByte;
-
       Instruction.REXPrefix := RexByte;
+      Instruction.REXPresent := True;
 
       Instruction.REXStruct.B := IsBitSet(RexByte, 0);
       Instruction.REXStruct.X := IsBitSet(RexByte, 1);
       Instruction.REXStruct.R := IsBitSet(RexByte, 2);
       Instruction.REXStruct.W := IsBitSet(RexByte, 3);
-
+{
       // Обрабатываем REX:
       case Instruction.REXStruct.W of
         True: if (Instruction.LegacyPrefixes[GRP1] = OperandSizeOverridePrefix) or
@@ -295,7 +296,7 @@ begin
 
         False: OperandSize := 8; // 8 байт = 64 бита
       end;
-
+}
       // Увеличиваем смещение опкода:
       Inc(Instruction.OpcodeOffset);
 
@@ -351,8 +352,12 @@ begin
     end;
   end;
 
-  Instruction.FullOpcode := (Instruction.Opcode[0] shl 16) + (Instruction.Opcode[1] shl 8) + Instruction.Opcode[0];
-
+  // Получаем полный опкод:
+  for I := 0 to Instruction.OpcodeSize - 1 do
+  begin
+    Instruction.FullOpcode := Instruction.FullOpcode shl 8;
+    Instruction.FullOpcode := Instruction.FullOpcode + Instruction.Opcode[I];
+  end;
 
   Instruction.ModRMPresent := IsModRmPresent(Instruction.FullOpcode, Instruction.OpcodeSize);
   if Instruction.ModRMPresent then
@@ -378,29 +383,157 @@ begin
 
         case _Mod of
           0: { 00b }
+          with Instruction do
           begin
-            //Instruction.AddressDisplacementSize :=
+            AddressDisplacementSize := 4;
+            AddressDisplacementOffset := SIBOffset + 1;
+            AddressDisplacement := GetDWord(Code, AddressDisplacementOffset);
           end;
 
           1: { 01b }
+          with Instruction do
           begin
-
+            AddressDisplacementSize := 1;
+            AddressDisplacementOffset := SIBOffset + 1;
+            AddressDisplacement := GetByte(Code, AddressDisplacementOffset);
           end;
 
           2: { 10b }
+          with Instruction do
           begin
-
+            AddressDisplacementSize := 4;
+            AddressDisplacementOffset := SIBOffset + 1;
+            AddressDisplacement := GetDWord(Code, AddressDisplacementOffset);
           end;
         end;
       end;
     end
     else
     begin
+      case _Mod of
+        1: { 01b }
+        with Instruction do
+        begin
+          AddressDisplacementSize := 1;
+          AddressDisplacementOffset := SIBOffset + 1;
+          AddressDisplacement := GetByte(Code, AddressDisplacementOffset);
+        end;
 
+        2: { 10b }
+        with Instruction do
+        begin
+          AddressDisplacementSize := 4;
+          AddressDisplacementOffset := SIBOffset + 1;
+          AddressDisplacement := GetDWord(Code, AddressDisplacementOffset);
+        end;
+      end;
     end;
   end;
 
-  Result := Result + Instruction.PrefixesSize + Instruction.OpcodeSize;
+  // Получаем флаги опкода:
+  case Instruction.OpcodeSize of
+    1: Instruction.OpcodeFlags := OneByteOpcodeFlags[Instruction.FullOpcode];
+    2: Instruction.OpcodeFlags := TwoBytesOpcodeFlags[Instruction.FullOpcode];
+    //3: ...
+  end;
+
+  // Получаем Immediate Data:
+  if IsNumberContains(Instruction.OpcodeFlags, OP_DATA_I8) then
+  begin
+    Instruction.ImmediateDataPresent := True;
+    Instruction.ImmediateDataOffset := Instruction.OpcodeOffset +
+                                       Instruction.OpcodeSize +
+                                       Byte(Instruction.ModRMPresent) +
+                                       Byte(Instruction.SIBPresent) +
+                                       Instruction.AddressDisplacementSize;
+    Instruction.ImmediateDataSize := 1;
+    Instruction.ImmediateData := GetByte(Code, Instruction.ImmediateDataOffset);
+  end;
+
+  if IsNumberContains(Instruction.OpcodeFlags, OP_DATA_I16) then
+  begin
+    Instruction.ImmediateDataPresent := True;
+    Instruction.ImmediateDataOffset := Instruction.OpcodeOffset +
+                                       Instruction.OpcodeSize +
+                                       Byte(Instruction.ModRMPresent) +
+                                       Byte(Instruction.SIBPresent) +
+                                       Instruction.AddressDisplacementSize;
+    Instruction.ImmediateDataSize := 2;
+    Instruction.ImmediateData := GetWord(Code, Instruction.ImmediateDataOffset);
+  end;
+
+  if IsNumberContains(Instruction.OpcodeFlags, OP_DATA_I16_I32) then
+  begin
+    Instruction.ImmediateDataPresent := True;
+    Instruction.ImmediateDataOffset := Instruction.OpcodeOffset +
+                                       Instruction.OpcodeSize +
+                                       Byte(Instruction.ModRMPresent) +
+                                       Byte(Instruction.SIBPresent) +
+                                       Instruction.AddressDisplacementSize;
+
+    if (Instruction.LegacyPrefixes[GRP1] = OperandSizeOverridePrefix) or
+       (Instruction.LegacyPrefixes[GRP2] = OperandSizeOverridePrefix) or
+       (Instruction.LegacyPrefixes[GRP3] = OperandSizeOverridePrefix) or
+       (Instruction.LegacyPrefixes[GRP4] = OperandSizeOverridePrefix)
+    then
+    begin
+      Instruction.ImmediateDataSize := 2;
+      Instruction.ImmediateData := GetWord(Code, Instruction.ImmediateDataOffset);
+    end
+    else
+    begin
+      Instruction.ImmediateDataSize := 4;
+      Instruction.ImmediateData := GetDWord(Code, Instruction.ImmediateDataOffset);
+    end;
+  end;
+
+  if IsNumberContains(Instruction.OpcodeFlags, OP_DATA_I16_I32_I64) then
+  begin
+    Instruction.ImmediateDataPresent := True;
+    Instruction.ImmediateDataOffset := Instruction.OpcodeOffset +
+                                       Instruction.OpcodeSize +
+                                       Byte(Instruction.ModRMPresent) +
+                                       Byte(Instruction.SIBPresent) +
+                                       Instruction.AddressDisplacementSize;
+
+    if (Instruction.LegacyPrefixes[GRP1] = OperandSizeOverridePrefix) or
+       (Instruction.LegacyPrefixes[GRP2] = OperandSizeOverridePrefix) or
+       (Instruction.LegacyPrefixes[GRP3] = OperandSizeOverridePrefix) or
+       (Instruction.LegacyPrefixes[GRP4] = OperandSizeOverridePrefix)
+    then
+    begin
+      if Instruction.REXPresent then
+      begin
+        Instruction.ImmediateDataSize := 4;
+        Instruction.ImmediateData := GetDWord(Code, Instruction.ImmediateDataOffset);
+      end
+      else
+      begin
+        Instruction.ImmediateDataSize := 2;
+        Instruction.ImmediateData := GetWord(Code, Instruction.ImmediateDataOffset);
+      end;
+    end
+    else
+    begin
+      if Instruction.REXPresent then
+      begin
+        Instruction.ImmediateDataSize := 8;
+        Instruction.ImmediateData := GetDWord(Code, Instruction.ImmediateDataOffset);
+      end
+      else
+      begin
+        Instruction.ImmediateDataSize := 4;
+        Instruction.ImmediateData := GetWord(Code, Instruction.ImmediateDataOffset);
+      end;
+    end;
+  end;
+
+  // Выводим результат:
+  Result := Result +
+            Instruction.PrefixesSize +
+            Instruction.OpcodeSize +
+            Instruction.AddressDisplacementSize +
+            Instruction.ImmediateDataSize;
 end;
 
 end.
