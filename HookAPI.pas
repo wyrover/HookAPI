@@ -2,12 +2,10 @@
 
 interface
 
-{$DEFINE RTL_READ_WRITE} // Использовать Move вместо NtRead[Write]VirtualMemory
-{$DEFINE USE_LDASM}      // Использовать дизассемблер длин
-
 uses
-  Windows, TlHelp32, PSAPI {$IFDEF USE_LDASM}, MicroDAsm{$ENDIF};
+  Windows, TlHelp32, PSAPI;
 
+{$DEFINE RTL_READ_WRITE} // Использовать Move вместо NtRead[Write]VirtualMemory
 
 const
   SE_DEBUG_NAME         = 'SeDebugPrivilege';
@@ -20,9 +18,10 @@ const
 // Структура для х64:
 type
   TFarJump = packed record
-    MovR11Op  : Word;                 //                   49 BB | mov r11
-    MovR11Arg : Pointer;              // 88 77 66 55 44 33 22 11 | qword $1122334455667788
-    JmpR11Op  : array [0..2] of Byte; //                41 FF E3 | jmp r11
+    MovRaxCommand: Word;
+    MovRaxArgument: Pointer;
+    PushRaxCommand: Byte;
+    RetCommand: Byte;
   end;
 
   NativeUInt = UInt64;
@@ -30,16 +29,16 @@ type
 // Структура для х32:
 type
   TFarJump = packed record
-    JmpOp  : Word;    //       FF 25 | jmp
-    JmpArg : Pointer; // 44 33 22 11 | dword ptr $11223344
+    PushOp: Byte;
+    PushArg: Pointer;
+    RetOp: Byte;
   end;
 
   NativeUInt = LongWord;
 {$ENDIF}
 
 type
-  TOriginalBlock = Pointer;
-
+  TOriginalBlock = array [0 .. SizeOf(TFarJump) - 1] of Byte;
 
 //HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
 
@@ -59,7 +58,6 @@ procedure StopThreads;
 procedure RunThreads;
 function  SetHook(OldProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
 function  UnHook(OriginalProcAddress: Pointer; OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
-procedure FreeOriginalBlock(OriginalBlock: Pointer);
 function  HookEmAll(out GlobalHookHandle: THandle): Boolean;
 procedure UnHookEmAll(GlobalHookHandle: THandle);
 
@@ -765,7 +763,7 @@ end;
 // Заморозить все потоки процесса, кроме текущего:
 procedure StopThreads;
 var
-  TlHelpHandle, CurrentThread, ThreadHandle, CurrentProcess: LongWord;
+  TlHelpHandle, CurrentThread, ThreadHandle, CurrentProcess: dword;
   ThreadEntry32: TThreadEntry32;
 begin
   CurrentThread := GetCurrentThreadId;
@@ -796,7 +794,7 @@ end;
 // Запустить все потоки процесса, кроме текущего:
 procedure RunThreads;
 var
-  TlHelpHandle, CurrentThread, ThreadHandle, CurrentProcess: LongWord;
+  TlHelpHandle, CurrentThread, ThreadHandle, CurrentProcess: dword;
   ThreadEntry32: TThreadEntry32;
 begin
   CurrentThread := GetCurrentThreadId;
@@ -830,111 +828,39 @@ var
 {$IFNDEF RTL_READ_WRITE}
   ReadBytes, WrittenBytes: NativeUInt;
 {$ENDIF}
-
-{$IFDEF USE_LDASM}
-  Instruction: TInstruction;
-  RequiredBufferSize: Byte; // Размер буфера для помещения целого числа инструкций
-{$ENDIF}
-
-  BufferSize: Byte;
   FarJump: TFarJump;
   OldProtect: Cardinal;
 begin
 {$IFDEF CPUX64}
   // x64:
-  { 49 BB [8 байт адреса] 41 FF E3 }
-  FarJump.MovR11Op  := $BB49;          //  --+
-  FarJump.MovR11Arg := NewProcAddress; //  --+-->  mov R11, NewProcAddress
-  FarJump.JmpR11Op[0] := $41;          //
-  FarJump.JmpR11Op[1] := $FF;          //  |---->  jmp R11
-  FarJump.JmpR11Op[2] := $E3;          //
+  { 48 B8 [8 байт адреса] 50 C3 }
+  FarJump.MovRaxCommand := $B848;           //  --+
+  FarJump.MovRaxArgument := NewProcAddress; //  --+-->  mov RAX, NewProcAddress
+  FarJump.PushRaxCommand := $50;            //  ----->  push RAX
+  FarJump.RetCommand := $C3;                //  ----->  ret
 {$ELSE}
   // х32:
-  { FF 25 [4 байта адреса] }
-  FarJump.JmpOp  := $BB49;             //  --+
-  FarJump.JmpArg := NewProcAddress;    //  --+-->  jmp dword ptr NewProcAddress
+  { 68 [4 байта адреса] C3 }
+  FarJump.PushOp  := $68;                   //  --+
+  FarJump.PushArg := NewProcAddress;        //  --+-->  push NewProcAddress
+  FarJump.RetOp   := $C3;                   //  ----->  ret
 {$ENDIF}
 
   if SuspendThreads then StopThreads;
+  VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
+  FillChar(OriginalBlock, SizeOf(FarJump), #0);
 
-  {$IFDEF USE_LDASM}
-    RequiredBufferSize := 0;
-
-    // Рассчитываем необходимый размер буфера:
-    while RequiredBufferSize < SizeOf(TFarJump) do
-    begin
-      Inc(
-           RequiredBufferSize,
-           LDasm(
-                  Pointer(NativeUInt(OldProcAddress) + RequiredBufferSize),
-                  {$IFDEF CPUX64}True{$ELSE}False{$ENDIF},
-                  Instruction
-                 )
-          );
-    end;
-
-    // Выделяем память под оригинальное начало функции с прыжком на продолжение:
-    BufferSize := RequiredBufferSize + SizeOf(TFarJump);
-    GetMem(OriginalBlock, BufferSize);
-
-    VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
-    FillChar(OriginalBlock^, BufferSize, #0);
-
-    {$IFDEF RTL_READ_WRITE}
-      // Сохраняем целое число инструкций:
-      Move(OldProcAddress^, OriginalBlock^, RequiredBufferSize);
-
-      // Записываем прыжок на новую функцию:
-      Move(FarJump, OldProcAddress^, SizeOf(TFarJump));
-
-      Result := True;
-    {$ELSE}
-      // Сохраняем целое число инструкций:
-      NtReadVirtualMemory(GetCurrentProcess, OldProcAddress, OriginalBlock, RequiredBufferSize, ReadBytes);
-
-      // Записываем прыжок на новую функцию:
-      NtWriteVirtualMemory(GetCurrentProcess, OldProcAddress, FarJump, FarJumpSize, WrittenBytes);
-      Result := WrittenBytes <> 0;
-    {$ENDIF}
-
-    VirtualProtect(OldProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
-
-    // Рассчитываем смещение в оригинальном блоке, куда потом запишем прыжок на продолжение:
-    {$IFDEF CPUX64}
-      FarJump.MovR11Arg := Pointer(NativeUInt(OldProcAddress) + RequiredBufferSize);
-    {$ELSE}
-      FarJump.JmpArg := Pointer(NativeUInt(OldProcAddress) + RequiredBufferSize);
-    {$ENDIF}
-
-    // Записываем в конец оригинального блока прыжок на продолжение оригинальной функции:
-    Move(FarJump, (Pointer(NativeUInt(OriginalBlock) + RequiredBufferSize))^, SizeOf(TFarJump));
-
-    // Назначаем оригинальному блоку права на исполнение:
-    VirtualProtect(OriginalBlock, BufferSize, PAGE_EXECUTE_READWRITE, @OldProtect);
-
-
+  {$IFDEF RTL_READ_WRITE}
+    Move(OldProcAddress^, OriginalBlock[0], SizeOf(FarJump));
+    Move(FarJump, OldProcAddress^, SizeOf(FarJump));
+    Result := True;
   {$ELSE}
-
-    // Выделяем память под оригинальное начало функции:
-    BufferSize := SizeOf(TFarJump);
-    GetMem(OriginalBlock, BufferSize);
-
-    VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
-    FillChar(OriginalBlock^, BufferSize, #0);
-
-    {$IFDEF RTL_READ_WRITE}
-      Move(OldProcAddress^, OriginalBlock^, SizeOf(FarJump));
-      Move(FarJump, OldProcAddress^, SizeOf(FarJump));
-      Result := True;
-    {$ELSE}
-      NtReadVirtualMemory(GetCurrentProcess, OldProcAddress, OriginalBlock, SizeOf(FarJump), ReadBytes);
-      NtWriteVirtualMemory(GetCurrentProcess, OldProcAddress, @FarJump, SizeOf(FarJump), WrittenBytes);
-      Result := WrittenBytes <> 0;
-    {$ENDIF}
-
-    VirtualProtect(OldProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
+    NtReadVirtualMemory(GetCurrentProcess, OldProcAddress, @OriginalBlock[0], SizeOf(FarJump), ReadBytes);
+    NtWriteVirtualMemory(GetCurrentProcess, OldProcAddress, @FarJump, SizeOf(FarJump), WrittenBytes);
+    Result := WrittenBytes <> 0;
   {$ENDIF}
 
+  VirtualProtect(OldProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
   if SuspendThreads then RunThreads;
 end;
 
@@ -953,7 +879,7 @@ begin
   VirtualProtect(OriginalProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
 
   {$IFDEF RTL_READ_WRITE}
-    Move(OriginalBlock^, OriginalProcAddress^, SizeOf(TFarJump));
+    Move(OriginalBlock[0], OriginalProcAddress^, SizeOf(TFarJump));
     Result := True;
   {$ELSE}
     NtWriteVirtualMemory(GetCurrentProcess, OriginalProcAddress, @OriginalBlock[0], SizeOf(TFarJump), WrittenBytes);
@@ -964,13 +890,6 @@ begin
   if SuspendThreads then RunThreads;
 end;
 
-
-//HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
-
-procedure FreeOriginalBlock(OriginalBlock: Pointer);
-begin
-  FreeMem(OriginalBlock);
-end;
 
 //HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
 
