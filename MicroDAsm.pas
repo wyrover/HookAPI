@@ -99,31 +99,38 @@ function LDasm(Code: Pointer; Is64Bit: Boolean; out Instruction: TInstruction): 
 
 implementation
 
+{$IFDEF CPUX64}
+  type
+    NativeUInt = UInt64;
+{$ELSE}
+  type
+    NativeUInt = LongWord;
+{$ENDIF}
 
-function GetByte(BaseAddress: Pointer; Offset: LongWord): Byte; inline;
+function GetByte(BaseAddress: Pointer; Offset: NativeUInt): Byte; inline;
 begin
-  Result := Byte((Pointer(LongWord(BaseAddress) + Offset))^);
+  Result := Byte((Pointer(NativeUInt(BaseAddress) + Offset))^);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-function GetWord(BaseAddress: Pointer; Offset: LongWord): Word; inline;
+function GetWord(BaseAddress: Pointer; Offset: NativeUInt): Word; inline;
 begin
-  Result := Word((Pointer(LongWord(BaseAddress) + Offset))^);
+  Result := Word((Pointer(NativeUInt(BaseAddress) + Offset))^);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-function GetDWord(BaseAddress: Pointer; Offset: LongWord): LongWord; inline;
+function GetDWord(BaseAddress: Pointer; Offset: NativeUInt): NativeUInt; inline;
 begin
-  Result := Byte((Pointer(LongWord(BaseAddress) + Offset))^);
+  Result := Byte((Pointer(NativeUInt(BaseAddress) + Offset))^);
 end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-function GetQWord(BaseAddress: Pointer; Offset: LongWord): UInt64; inline;
+function GetQWord(BaseAddress: Pointer; Offset: NativeUInt): UInt64; inline;
 begin
-  Result := UInt64((Pointer(LongWord(BaseAddress) + Offset))^);
+  Result := UInt64((Pointer(NativeUInt(BaseAddress) + Offset))^);
 end;
 
 //HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
@@ -237,7 +244,7 @@ begin
   // Получаем Legacy Prefix всех групп (GRP 1 - GRP 4):
   for I := 0 to 3 do
   begin
-    case GetByte(Code, 0) of
+    case GetByte(Code, I) of
       LockPrefix       : Instruction.LegacyPrefixes[I] := LockPrefix;
       RepneRepnzPrefix : Instruction.LegacyPrefixes[I] := RepneRepnzPrefix;
       RepeRepzPrefix   : Instruction.LegacyPrefixes[I] := RepeRepzPrefix;

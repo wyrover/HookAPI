@@ -823,6 +823,10 @@ var
   BufferSize: Byte;
   FarJump: TFarJump;
   OldProtect: Cardinal;
+
+const
+  ProtectSize = 64;
+
 begin
 {$IFDEF CPUX64}
   // x64:
@@ -842,9 +846,11 @@ begin
   if SuspendThreads then StopThreads;
 
   {$IFDEF USE_LDASM}
-    RequiredBufferSize := 0;
+    // Снимаем защиту на чтение/запись:
+    VirtualProtect(OldProcAddress, ProtectSize, PAGE_EXECUTE_READWRITE, @OldProtect);
 
     // Рассчитываем необходимый размер буфера:
+    RequiredBufferSize := 0;
     while RequiredBufferSize < SizeOf(TFarJump) do
     begin
       Inc(
@@ -860,8 +866,6 @@ begin
     // Выделяем память под оригинальное начало функции с прыжком на продолжение:
     BufferSize := RequiredBufferSize + SizeOf(TFarJump);
     GetMem(OriginalBlock, BufferSize);
-
-    VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
     FillChar(OriginalBlock^, BufferSize, #0);
 
     {$IFDEF RTL_READ_WRITE}
@@ -881,7 +885,8 @@ begin
       Result := WrittenBytes <> 0;
     {$ENDIF}
 
-    VirtualProtect(OldProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
+    // Восстанавливаем защиту на чтение/запись:
+    VirtualProtect(OldProcAddress, ProtectSize, OldProtect, @OldProtect);
 
     // Рассчитываем смещение в оригинальном блоке, куда потом запишем прыжок на продолжение:
     {$IFDEF CPUX64}
@@ -902,9 +907,10 @@ begin
     // Выделяем память под оригинальное начало функции:
     BufferSize := SizeOf(TFarJump);
     GetMem(OriginalBlock, BufferSize);
-
-    VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
     FillChar(OriginalBlock^, BufferSize, #0);
+
+    // Снимаем защиту на чтение/запись:
+    VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
 
     {$IFDEF RTL_READ_WRITE}
       Move(OldProcAddress^, OriginalBlock^, SizeOf(FarJump));
@@ -916,6 +922,7 @@ begin
       Result := WrittenBytes <> 0;
     {$ENDIF}
 
+    // Восстанавливаем защиту на чтение/запись:
     VirtualProtect(OldProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
   {$ENDIF}
 
