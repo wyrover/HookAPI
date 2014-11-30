@@ -1,4 +1,4 @@
-library HookLib;
+﻿library HookLib;
 
 {$SETPEFLAGS $0002 or $0004 or $0008 or $0010 or $0020 or $0200 or $0400 or $0800 or $1000}
 {$WEAKLINKRTTI ON}
@@ -237,7 +237,7 @@ begin
     FreeMappedMemory(MappedMemory);
   end;
 
-  if (HideInAllProcesses) and (GlobalHookHandle <> 0) then HookEmAll(GlobalHookHandle);
+  if (HideInAllProcesses) and (GlobalHookHandle = 0) then HookEmAll(GlobalHookHandle);
 end;
 
 
