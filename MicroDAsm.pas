@@ -192,7 +192,7 @@ begin
   //      Mod Reg R/M
   // 192 = 11 000 000b - Mod
   //   4 =        100b - R/M
-  Result := ((ModRM and 192) <> 192) and ((ModRM and 4) = 4);
+  Result := ((ModRM and 192) <> 192) and ((ModRM and $FF) = 4);
 end;
 
 //HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
@@ -418,6 +418,17 @@ begin
     else
     begin
       case _Mod of
+        0: { 00b }
+        with Instruction do
+        begin
+          if _RM = 5 { 101b } then
+          begin
+            AddressDisplacementSize := 4;
+            AddressDisplacementOffset := SIBOffset + 1;
+            AddressDisplacement := GetDWord(Code, AddressDisplacementOffset);
+          end;
+        end;
+
         1: { 01b }
         with Instruction do
         begin

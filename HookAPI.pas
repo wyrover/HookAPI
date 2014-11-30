@@ -25,15 +25,17 @@ type
     JmpR11Op  : array [0..2] of Byte; //                41 FF E3 | jmp r11
   end;
 
+  NativeInt  = Int64;
   NativeUInt = UInt64;
 {$ELSE}
 // Структура для х32:
 type
   TFarJump = packed record
-    JmpOp  : Word;    //       FF 25 | jmp
-    JmpArg : Pointer; // 44 33 22 11 | dword ptr $11223344
+    JmpOp  : Byte;    //          E9 | jmp
+    JmpArg : Pointer; // 44 33 22 11 | dword $11223344
   end;
 
+  NativeInt  = Integer;
   NativeUInt = LongWord;
 {$ENDIF}
 
@@ -57,11 +59,11 @@ function UnloadDll64(ProcessID: LongWord; ModuleName: PAnsiChar; GMHAddress: UIn
 // Для DLL:
 procedure StopThreads;
 procedure RunThreads;
-function  SetHook(OldProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
+function  SetHook(OriginalProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
 function  UnHook(OriginalProcAddress: Pointer; OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
 procedure FreeOriginalBlock(OriginalBlock: Pointer);
 function  HookEmAll(out GlobalHookHandle: THandle): Boolean;
-procedure UnHookEmAll(GlobalHookHandle: THandle);
+procedure UnHookEmAll(var GlobalHookHandle: THandle);
 
 // Инъекция шелл-кода напрямую:
 procedure InjectFunction(ProcessID: LongWord; InjectedFunction: Pointer; InjectedFunctionSize: NativeUInt);
@@ -809,7 +811,7 @@ end;
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 // Установка перехватчика:
-function SetHook(OldProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
+function SetHook(OriginalProcAddress: Pointer; NewProcAddress: Pointer; out OriginalBlock: TOriginalBlock; SuspendThreads: Boolean = True): Boolean;
 var
 {$IFNDEF RTL_READ_WRITE}
   ReadBytes, WrittenBytes: NativeUInt;
@@ -823,6 +825,18 @@ var
   BufferSize: Byte;
   FarJump: TFarJump;
   OldProtect: Cardinal;
+
+  // Расчёт относительно адреса для прыжка в х32 ( E9 [ Относительный адрес ] )
+  function GetRelativeJmp32Address(Source, Destination: Pointer): Pointer; inline;
+  begin
+    Result := Pointer(NativeInt(Destination) - NativeInt(Source) - 5);
+  end;
+
+  // Сдвиг указателя:
+  function GetShiftedPointer(Base: Pointer; Offset: NativeInt): Pointer; inline;
+  begin
+    Result := Pointer(NativeInt(Base) + Offset);
+  end;
 
 const
   ProtectSize = 64;
@@ -838,16 +852,19 @@ begin
   FarJump.JmpR11Op[2] := $E3;          //
 {$ELSE}
   // х32:
-  { FF 25 [4 байта адреса] }
-  FarJump.JmpOp  := $BB49;             //  --+
-  FarJump.JmpArg := NewProcAddress;    //  --+-->  jmp dword ptr NewProcAddress
+  { E9 [4 байта адреса относительно следующей инструкции] }
+  FarJump.JmpOp  := $E9;                     //  --+
+  FarJump.JmpArg := GetRelativeJmp32Address( //  --+-->  jmp dword NewProcAddress
+                                             OriginalProcAddress,
+                                             NewProcAddress
+                                            );
 {$ENDIF}
 
   if SuspendThreads then StopThreads;
 
   {$IFDEF USE_LDASM}
     // Снимаем защиту на чтение/запись:
-    VirtualProtect(OldProcAddress, ProtectSize, PAGE_EXECUTE_READWRITE, @OldProtect);
+    VirtualProtect(OriginalProcAddress, ProtectSize, PAGE_EXECUTE_READWRITE, @OldProtect);
 
     // Рассчитываем необходимый размер буфера:
     RequiredBufferSize := 0;
@@ -856,7 +873,7 @@ begin
       Inc(
            RequiredBufferSize,
            LDasm(
-                  Pointer(NativeUInt(OldProcAddress) + RequiredBufferSize),
+                  Pointer(NativeUInt(OriginalProcAddress) + RequiredBufferSize),
                   {$IFDEF CPUX64}True{$ELSE}False{$ENDIF},
                   Instruction
                  )
@@ -870,33 +887,40 @@ begin
 
     {$IFDEF RTL_READ_WRITE}
       // Сохраняем целое число инструкций:
-      Move(OldProcAddress^, OriginalBlock^, RequiredBufferSize);
+      Move(OriginalProcAddress^, OriginalBlock^, RequiredBufferSize);
 
       // Записываем прыжок на новую функцию:
-      Move(FarJump, OldProcAddress^, SizeOf(TFarJump));
+      Move(FarJump, OriginalProcAddress^, SizeOf(TFarJump));
 
       Result := True;
     {$ELSE}
       // Сохраняем целое число инструкций:
-      NtReadVirtualMemory(GetCurrentProcess, OldProcAddress, OriginalBlock, RequiredBufferSize, ReadBytes);
+      NtReadVirtualMemory(GetCurrentProcess, OriginalProcAddress, OriginalBlock, RequiredBufferSize, ReadBytes);
 
       // Записываем прыжок на новую функцию:
-      NtWriteVirtualMemory(GetCurrentProcess, OldProcAddress, FarJump, FarJumpSize, WrittenBytes);
+      NtWriteVirtualMemory(GetCurrentProcess, OriginalProcAddress, @FarJump, SizeOf(TFarJump), WrittenBytes);
       Result := WrittenBytes <> 0;
     {$ENDIF}
 
     // Восстанавливаем защиту на чтение/запись:
-    VirtualProtect(OldProcAddress, ProtectSize, OldProtect, @OldProtect);
+    VirtualProtect(OriginalProcAddress, ProtectSize, OldProtect, @OldProtect);
 
     // Рассчитываем смещение в оригинальном блоке, куда потом запишем прыжок на продолжение:
     {$IFDEF CPUX64}
-      FarJump.MovR11Arg := Pointer(NativeUInt(OldProcAddress) + RequiredBufferSize);
+      FarJump.MovR11Arg := Pointer(NativeUInt(OriginalProcAddress) + RequiredBufferSize);
     {$ELSE}
-      FarJump.JmpArg := Pointer(NativeUInt(OldProcAddress) + RequiredBufferSize);
+      FarJump.JmpArg := GetRelativeJmp32Address(
+                                                 GetShiftedPointer(OriginalBlock, RequiredBufferSize),
+                                                 GetShiftedPointer(OriginalProcAddress, RequiredBufferSize)
+                                                );
     {$ENDIF}
 
     // Записываем в конец оригинального блока прыжок на продолжение оригинальной функции:
-    Move(FarJump, (Pointer(NativeUInt(OriginalBlock) + RequiredBufferSize))^, SizeOf(TFarJump));
+    {$IFDEF RTL_READ_WRITE}
+      Move(FarJump, GetShiftedPointer(OriginalBlock, RequiredBufferSize)^, SizeOf(TFarJump));
+    {$ELSE}
+      NtWriteVirtualMemory(GetCurrentProcess, GetShiftedPointer(OriginalBlock, RequiredBufferSize), @FarJump, SizeOf(TFarJump), WrittenBytes);
+    {$ENDIF}
 
     // Назначаем оригинальному блоку права на исполнение:
     VirtualProtect(OriginalBlock, BufferSize, PAGE_EXECUTE_READWRITE, @OldProtect);
@@ -910,20 +934,20 @@ begin
     FillChar(OriginalBlock^, BufferSize, #0);
 
     // Снимаем защиту на чтение/запись:
-    VirtualProtect(OldProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
+    VirtualProtect(OriginalProcAddress, SizeOf(TFarJump), PAGE_EXECUTE_READWRITE, @OldProtect);
 
     {$IFDEF RTL_READ_WRITE}
-      Move(OldProcAddress^, OriginalBlock^, SizeOf(FarJump));
-      Move(FarJump, OldProcAddress^, SizeOf(FarJump));
+      Move(OriginalProcAddress^, OriginalBlock^, SizeOf(FarJump));
+      Move(FarJump, OriginalProcAddress^, SizeOf(FarJump));
       Result := True;
     {$ELSE}
-      NtReadVirtualMemory(GetCurrentProcess, OldProcAddress, OriginalBlock, SizeOf(FarJump), ReadBytes);
-      NtWriteVirtualMemory(GetCurrentProcess, OldProcAddress, @FarJump, SizeOf(FarJump), WrittenBytes);
+      NtReadVirtualMemory(GetCurrentProcess, OriginalProcAddress, OriginalBlock, SizeOf(FarJump), ReadBytes);
+      NtWriteVirtualMemory(GetCurrentProcess, OriginalProcAddress, @FarJump, SizeOf(FarJump), WrittenBytes);
       Result := WrittenBytes <> 0;
     {$ENDIF}
 
     // Восстанавливаем защиту на чтение/запись:
-    VirtualProtect(OldProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
+    VirtualProtect(OriginalProcAddress, SizeOf(TFarJump), OldProtect, @OldProtect);
   {$ENDIF}
 
   if SuspendThreads then RunThreads;
@@ -947,7 +971,7 @@ begin
     Move(OriginalBlock^, OriginalProcAddress^, SizeOf(TFarJump));
     Result := True;
   {$ELSE}
-    NtWriteVirtualMemory(GetCurrentProcess, OriginalProcAddress, @OriginalBlock[0], SizeOf(TFarJump), WrittenBytes);
+    NtWriteVirtualMemory(GetCurrentProcess, OriginalProcAddress, OriginalBlock, SizeOf(TFarJump), WrittenBytes);
     Result := WrittenBytes <> 0;
   {$ENDIF}
 
@@ -981,9 +1005,10 @@ end;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-procedure UnHookEmAll(GlobalHookHandle: THandle);
+procedure UnHookEmAll(var GlobalHookHandle: THandle);
 begin
   UnhookWindowsHookEx(GlobalHookHandle);
+  GlobalHookHandle := 0;
 end;
 
 end.
